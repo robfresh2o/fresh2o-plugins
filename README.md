@@ -20,6 +20,10 @@ claude plugin install needs-you@fresh2o-plugins
 
 ### needs-you
 
+
+https://github.com/user-attachments/assets/dc29b0c6-68a3-48ad-90cb-7b5c6df6fb8b
+
+
 When Claude needs something from you, such as a decision, an approval or a command only you can run, it opens its reply with a `**Needs you**` line. This plugin finds that line and draws the section under it in a box, with a small Claude creature hopping beside it. The creature keeps hopping until you send your next prompt, so you can see at a glance that a reply is waiting on you.
 
 A decision written as a question, with its choices as a numbered list under it, gets one button per choice. Pressing a button sends the question and your choice as your reply. If the section holds several decisions, your picks collect and send together. Add `(recommended)` after a choice to make it the primary button.
