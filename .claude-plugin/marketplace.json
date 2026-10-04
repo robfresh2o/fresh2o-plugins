@@ -1,0 +1,14 @@
+{
+  "name": "fresh2o-plugins",
+  "description": "Claude Code plugins by Rob Freshwater.",
+  "owner": {
+    "name": "Rob Freshwater"
+  },
+  "plugins": [
+    {
+      "name": "needs-you",
+      "source": "./plugins/needs-you",
+      "description": "Highlights the Needs you section of a reply, with a hopping Claude beside it, and turns its decisions into buttons."
+    }
+  ]
+}

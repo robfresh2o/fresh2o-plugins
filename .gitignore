@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+# A local CLAUDE.md is private and never committed
+CLAUDE.md
+CLAUDE.local.md
+# Type declarations Claude Code generates for each plugin
+**/.claude-plugin/types/
+# Agent worktrees made by Claude Code
+.claude/worktrees/
+# Written by Claude Code beside a plugin; it points at the ignored types above
+plugins/*/tsconfig.json

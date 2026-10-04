@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      # The catalogue, and every mod folder under plugins/, must pass Claude Code's own validator.
+      - run: npx -y @anthropic-ai/claude-code plugin validate .
+      - name: Validate each mod
+        run: |
+          for d in plugins/*/; do
+            [ -d "$d" ] || continue
+            npx -y @anthropic-ai/claude-code plugin validate "$d"
+          done
+      # Each mod's own tests (any *.test.ts or *.test.tsx under its folder) must pass. A mod with
+      # none is skipped, since plugin test fails a folder that has no tests.
+      - name: Test each mod
+        run: |
+          for d in plugins/*/; do
+            [ -d "$d" ] || continue
+            if find "$d" \( -name '*.test.ts' -o -name '*.test.tsx' \) -not -path '*/node_modules/*' | grep -q .; then
+              npx -y @anthropic-ai/claude-code plugin test "$d"
+            fi
+          done
+
+  # Secrets never enter git: the PR fails if any commit it adds contains a secret.
+  # Scans only the commits in the PR (or the push), never the whole history.
+  secrets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
