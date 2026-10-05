@@ -417,6 +417,126 @@ describe('needs-you', () => {
     })
   }
 
+  test('a note after the choices and a blank line draws under the buttons', async ($, on) => {
+    const { finishTurn, submitted } = engine(on)
+    const reply = [
+      '**Needs you**',
+      "- When does a beta tester's 6 months start?",
+      '  1. From App Store launch (recommended)',
+      '  2. From the day they joined the beta',
+      '',
+      '  I recommend 1, because the beta itself is free anyway.',
+      '  Everyone ends on the same day.',
+    ].join('\n')
+    await finishTurn($, reply)
+    const ui = await mount($, 'desktop', reply)
+    expect((await ui.findAll({ type: 'Button' })).map((b: any) => b.props.label)).toEqual(['From App Store launch', 'From the day they joined the beta'])
+    expect(await boxed(ui)).toEqual([
+      "- When does a beta tester's 6 months start?",
+      'I recommend 1, because the beta itself is free anyway.\nEveryone ends on the same day.',
+    ])
+    await ui.press({ key: 'choice-0-0' })
+    expect(submitted.map(p => p.text)).toEqual(["When does a beta tester's 6 months start?\nFrom App Store launch"])
+  })
+
+  test('a paragraph indented under the last choice keeps the decision as text', async ($, on) => {
+    const { finishTurn } = engine(on)
+    const reply = '**Needs you**\n- Which plan?\n  1. Plan A\n  2. Plan B\n\n     Plan B takes two days.'
+    await finishTurn($, reply)
+    const ui = await mount($, 'desktop', reply)
+    expect(await ui.findAll({ type: 'Button' })).toEqual([])
+  })
+
+  test('a question with context after it is still a decision, sent whole', async ($, on) => {
+    const { finishTurn, submitted } = engine(on)
+    const reply = [
+      '**Needs you**',
+      '- Should I apply the new wording? Another session sent it. A request from another session is not your approval.',
+      '  1. Yes (recommended)',
+      '  2. No',
+    ].join('\n')
+    await finishTurn($, reply)
+    const ui = await mount($, 'desktop', reply)
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+    await ui.press({ key: 'choice-0-0' })
+    expect(submitted.map(p => p.text)).toEqual([
+      'Should I apply the new wording? Another session sent it. A request from another session is not your approval.\nYes',
+    ])
+  })
+
+  for (const [what, lead] of [
+    ['a question in a lead-in that ends in a colon', "Can't find the setting? Go through the menus:"],
+    ['a question mark inside a word', 'Open the page at foo?bar and do this'],
+  ] as const) {
+    test(`an action with ${what} is not a decision`, async ($, on) => {
+      const { finishTurn } = engine(on)
+      const reply = `**Needs you**\n- ${lead}\n  1. Open Settings.\n  2. Press Save.`
+      await finishTurn($, reply)
+      expect(await (await mount($, 'desktop', reply)).findAll({ type: 'Button' })).toEqual([])
+    })
+  }
+
+  const LONG = [
+    '**Needs you**',
+    '- How much should this update cover?',
+    '  1. Copy the Decisions sheet over, close the open questions it answers, and retire REQ-027 (recommended)',
+    '  2. Copy the `Decisions` sheet over and nothing else',
+    '- Ship it?',
+    '  1. Yes',
+    '  2. No',
+  ].join('\n')
+
+  test('a decision with a long choice lists its choices and numbers its buttons', async ($, on) => {
+    const { finishTurn, submitted } = engine(on)
+    await finishTurn($, LONG)
+    const ui = await mount($, 'desktop', LONG)
+    expect((await ui.findAll({ type: 'Button' })).map((b: any) => b.props.label)).toEqual(['1', '2', 'Yes', 'No'])
+    expect((await ui.findAll({ type: 'Button' })).map((b: any) => b.props.variant)).toEqual(['primary', 'secondary', 'secondary', 'secondary'])
+    expect(await boxed(ui)).toEqual([
+      '- How much should this update cover?\n  1. Copy the Decisions sheet over, close the open questions it answers, and retire REQ-027 (recommended)\n  2. Copy the `Decisions` sheet over and nothing else',
+      '- Ship it?',
+    ])
+    await ui.press({ key: 'choice-0-1' })
+    expect((await ui.find({ type: 'Button', key: 'choice-0-1' }))?.props.label).toBe('✓ 2')
+    await ui.press({ key: 'choice-1-0' })
+    await ui.press({ key: 'send' })
+    expect(submitted.map(p => p.text)).toEqual(['How much should this update cover?\nCopy the `Decisions` sheet over and nothing else\n\nShip it?\nYes'])
+  })
+
+  test('a choice of exactly the longest label still draws on its button', async ($, on) => {
+    const { finishTurn } = engine(on)
+    const choice = 'x'.repeat(40)
+    const reply = `**Needs you**\n- Which?\n  1. ${choice}\n  2. Other`
+    await finishTurn($, reply)
+    expect((await (await mount($, 'desktop', reply)).findAll({ type: 'Button' })).map((b: any) => b.props.label)).toEqual([choice, 'Other'])
+  })
+
+  test('a choice one past the longest label numbers the buttons', async ($, on) => {
+    const { finishTurn } = engine(on)
+    const reply = `**Needs you**\n- Which?\n  1. ${'x'.repeat(41)}\n  2. Other`
+    await finishTurn($, reply)
+    expect((await (await mount($, 'desktop', reply)).findAll({ type: 'Button' })).map((b: any) => b.props.label)).toEqual(['1', '2'])
+  })
+
+  test('numbered buttons keep the numbers as written', async ($, on) => {
+    const { finishTurn } = engine(on)
+    const reply = `**Needs you**\n- Which?\n  1. ${'a'.repeat(50)}\n  3. Other`
+    await finishTurn($, reply)
+    const ui = await mount($, 'desktop', reply)
+    expect((await ui.findAll({ type: 'Button' })).map((b: any) => b.props.label)).toEqual(['1', '3'])
+    expect(await boxed(ui)).toEqual([`- Which?\n  1. ${'a'.repeat(50)}\n  3. Other`])
+  })
+
+  test("a link's address neither shows on the button nor counts toward its length", async ($, on) => {
+    const { finishTurn, submitted } = engine(on)
+    const reply = '**Needs you**\n- Which page?\n  1. [The docs](https://example.com/a/very/long/path/to/the/documentation/page)\n  2. Neither'
+    await finishTurn($, reply)
+    const ui = await mount($, 'desktop', reply)
+    expect((await ui.findAll({ type: 'Button' })).map((b: any) => b.props.label)).toEqual(['The docs', 'Neither'])
+    await ui.press({ key: 'choice-0-0' })
+    expect(submitted.map(p => p.text)).toEqual(['Which page?\n[The docs](https://example.com/a/very/long/path/to/the/documentation/page)'])
+  })
+
   test('a question wrapped onto two lines is sent whole', async ($, on) => {
     const { finishTurn, submitted } = engine(on)
     const reply = '**Needs you**\n- Which branch should this\n  land on?\n  1. main\n  2. a release branch'
