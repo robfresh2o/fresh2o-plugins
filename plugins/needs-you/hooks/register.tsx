@@ -9,10 +9,12 @@
  * motion. A turn Rob did not start (a background task finishing, say) does not settle an ask he
  * has not answered, though a new section in its reply takes over the hop.
  *
- * While the ask is open, a decision draws a button per choice: a top-level bullet whose text ends
- * in "?" (trailing bold or code aside), with a numbered list of two or more one-line choices under
- * it. `(recommended)` marks the primary button. Pressing one sends the question and the choice as
- * Rob's reply; with several decisions, the picks collect and send together.
+ * While the ask is open, a decision draws a button per choice: a top-level bullet with a sentence
+ * ending in "?", with a numbered list of two or more one-line choices under it, and optionally a
+ * note under those. `(recommended)` marks the primary button. When a choice is too long for a
+ * button, the choices stay listed as text and the buttons carry their numbers. Pressing one sends
+ * the question and the choice as Rob's reply; with several decisions, the picks collect and send
+ * together.
  *
  * There is no model call anywhere in this. The marker is plain text, and `isMarker` is the rule
  * the Claude Deck plugin uses to decide when the Status key hops (`isMarkerLine` in
@@ -132,13 +134,33 @@ function split(text: string): Split | null {
   }
 }
 
-/** One thing the section asks of Rob: the bullet's text, and its choices when it is a decision. */
-type Item = { text: string; question: string; choices: Choice[] }
-type Choice = { label: string; answer: string; isRecommended: boolean }
+/**
+ * One thing the section asks of Rob: the bullet's text, and its choices when it is a decision,
+ * with any note written under them.
+ */
+type Item = { text: string; question: string; choices: Choice[]; note: string }
+type Choice = { number: string; label: string; answer: string; isRecommended: boolean }
 
 const TOP_BULLET = /^[-*+]\s+/
-const CHOICE = /^\s+\d+[.)]\s+(.*)$/
+const CHOICE = /^\s+(\d+)[.)]\s+(.*)$/
 const RECOMMENDED = /\s*(\*\*|__|\*|_)?\(recommended\)\1?\s*/i
+
+/**
+ * A "?" that ends a sentence: followed, past any closing bold, code, bracket or quote, by a space
+ * or the end. The "?" of a URL query runs on into the query, so it never counts.
+ */
+const ENDS_QUESTION = /\?[*_`)"']*(\s|$)/
+
+/**
+ * The longest choice drawn on its own button. A decision with a longer choice lists its choices
+ * as text and numbers its buttons, so no button runs past the box.
+ */
+const LONGEST_LABEL = 40
+
+/** Whether the decision's buttons carry numbers, its choices listed as text above them. */
+function isNumbered(item: Item): boolean {
+  return item.choices.some(choice => choice.label.length > LONGEST_LABEL)
+}
 
 /**
  * The section as its bullets, when it is written as one: each top-level bullet is an item, and a
@@ -156,32 +178,50 @@ function itemsOf(section: string): Item[] | null {
   }
   return items.map(block => {
     const text = block.join('\n').trim()
+    const plain: Item = { text, question: '', choices: [], note: '' }
     const firstChoice = block.findIndex(line => CHOICE.test(line))
-    if (firstChoice === -1) return { text, question: '', choices: [] }
-    // Choices are the numbered lines at the first choice's indent, and nothing else may follow
-    // them: a choice with lines of its own under it, or a note after the list, is more than a
-    // button can carry, so the bullet draws as text instead.
-    const indent = (/^\s*/.exec(block[firstChoice] ?? '')?.[0] ?? '').length
-    const rest = block.slice(firstChoice)
-    const isChoice = (line: string) => CHOICE.test(line) && (/^\s*/.exec(line)?.[0] ?? '').length === indent
-    if (rest.some(line => line.trim() !== '' && !isChoice(line))) return { text, question: '', choices: [] }
+    if (firstChoice === -1) return plain
+    // Choices are the numbered lines at the first choice's indent, with only blank lines between
+    // them. A choice with lines of its own under it is more than a button can carry, so the bullet
+    // draws as text instead. After the last choice and a blank line, lines no deeper than the
+    // choices are a note, drawn under the buttons. Without the blank line Markdown reads them as
+    // more of the last choice, so they count as the choice's own lines.
+    const indentOf = (line: string) => (/^\s*/.exec(line)?.[0] ?? '').length
+    const indent = indentOf(block[firstChoice] ?? '')
+    const isChoice = (line: string) => CHOICE.test(line) && indentOf(line) === indent
+    let lastChoice = firstChoice
+    block.forEach((line, i) => {
+      if (isChoice(line)) lastChoice = i
+    })
+    const list = block.slice(firstChoice, lastChoice + 1)
+    if (list.some(line => line.trim() !== '' && !isChoice(line))) return plain
+    const tail = block.slice(lastChoice + 1)
+    const noteAt = tail.findIndex(line => line.trim() !== '')
+    if (noteAt === 0) return plain
+    const note = noteAt === -1 ? [] : tail.slice(noteAt)
+    if (note.some(line => line.trim() !== '' && indentOf(line) > indent)) return plain
     const question = block.slice(0, firstChoice).join(' ').replace(TOP_BULLET, '').replace(/\s+/g, ' ').trim()
-    const choices = rest.filter(isChoice).map(line => {
+    // A decision asks a direct question, as Rob's CLAUDE.md has it: a sentence of its text ends
+    // in "?", though context may follow it. An action with numbered steps is the same shape
+    // without the question, and its steps are not answers. A lead-in ending in ":" introduces
+    // steps, whatever it asked on the way. A "?" in a URL does not count.
+    const isQuestion = ENDS_QUESTION.test(question) && !question.replace(/[*_`\s]+$/, '').endsWith(':')
+    if (!isQuestion) return plain
+    const choices = list.filter(isChoice).map(line => {
       // The reply carries the choice as written, so code and links reach Claude intact. A button
-      // draws plain text, so its face loses the backticks around code and the bold, never what is
-      // inside the code.
-      const answer = (CHOICE.exec(line)?.[1] ?? '').replace(RECOMMENDED, ' ').replace(/\s+/g, ' ').trim()
+      // draws plain text, so its face loses the backticks around code, the bold and a link's
+      // address, never what is inside the code.
+      const found = CHOICE.exec(line)
+      const answer = (found?.[2] ?? '').replace(RECOMMENDED, ' ').replace(/\s+/g, ' ').trim()
       return {
-        label: answer.replace(/`([^`]*)`|\*\*(.+?)\*\*/g, (_, code, bold) => code ?? bold),
+        number: found?.[1] ?? '',
+        label: answer.replace(/`([^`]*)`|\*\*(.+?)\*\*|\[([^\]]+)\]\([^)]*\)/g, (_, code, bold, link) => code ?? bold ?? link),
         answer,
         isRecommended: RECOMMENDED.test(line),
       }
     })
-    // A decision is a direct question, as Rob's CLAUDE.md has it: its text ends in "?", bold or
-    // code around it aside. An action with numbered steps is the same shape without the question
-    // mark, and its steps are not answers. A "?" anywhere else, as in a URL, does not count.
-    const isQuestion = question.replace(/[*_`\s]+$/, '').endsWith('?')
-    return { text, question, choices: isQuestion && choices.length >= 2 ? choices : [] }
+    if (choices.length < 2) return plain
+    return { text, question, choices, note: note.map(line => line.slice(Math.min(indent, indentOf(line)))).join('\n').trim() }
   })
 }
 
@@ -327,16 +367,22 @@ export const register: Register = on => {
           {items.map((item, i) => {
             if (item.choices.length === 0) return <Markdown key={`item-${i}`} text={item.text} />
             const d = decisions.indexOf(item)
+            // Long choices stay readable as a numbered list, and their buttons carry the numbers.
+            const numbered = isNumbered(item)
+            const list = numbered
+              ? item.choices.map(choice => `\n  ${choice.number}. ${choice.answer}${choice.isRecommended ? ' (recommended)' : ''}`).join('')
+              : ''
             return (
               <Box key={`item-${i}`} flexDirection="column">
-                <Markdown text={`- ${item.question}`} />
+                <Markdown text={`- ${item.question}${list}`} />
                 <Box flexDirection="row" flexWrap="wrap" columnGap={1} paddingLeft={2}>
                   {item.choices.map((choice, c) => {
                     const isPicked = chosen[String(d)] === c
+                    const face = numbered ? choice.number : choice.label
                     return (
                       <Button
                         key={`choice-${d}-${c}`}
-                        label={isPicked ? `✓ ${choice.label}` : choice.label}
+                        label={isPicked ? `✓ ${face}` : face}
                         variant={choice.isRecommended ? 'primary' : 'secondary'}
                         onPress={() => {
                           if (isSingle) {
@@ -349,6 +395,11 @@ export const register: Register = on => {
                     )
                   })}
                 </Box>
+                {item.note ? (
+                  <Box paddingLeft={2}>
+                    <Markdown text={item.note} />
+                  </Box>
+                ) : null}
               </Box>
             )
           })}
